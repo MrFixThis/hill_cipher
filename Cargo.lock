@@ -154,6 +154,7 @@ version = "0.1.0"
 dependencies = [
  "colored",
  "derive_builder",
+ "modinverse",
  "rulinalg",
  "structopt",
  "thiserror",
@@ -184,6 +185,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dcad67dcec2d58ff56f6292582377e6921afdf3bfbd533e26fb8900ae575e002"
 dependencies = [
  "rawpointer",
+]
+
+[[package]]
+name = "modinverse"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f62f577f148cc1a9466e7065a22e59466a7d537cceba5e77e57181d0f706633"
+dependencies = [
+ "num-integer",
 ]
 
 [[package]]

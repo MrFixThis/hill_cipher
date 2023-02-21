@@ -1,4 +1,4 @@
-pub mod data;
+pub mod input;
 pub mod process;
 pub mod error;
 pub mod ui;
