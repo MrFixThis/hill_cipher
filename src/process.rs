@@ -17,13 +17,13 @@ pub const DEFAULT_NAMESPACE: [char; 26] = [
 /// A report that holds the results of the processes performed by a
 /// [`Processor`] with the information provided to program.
 #[derive(Debug, Default, Builder, PartialEq)]
-pub struct Report<'a> {
-	pub used_key: &'a str,
-	pub source_txt: &'a str,
+pub struct Report {
+	pub used_key: String,
+	pub source_txt: String,
 	pub fill_letter: Option<char>,
 	pub result_txt: String,
-	pub filled: Option<bool>,
-	pub def_namespace: Option<&'a String>
+	pub filled: bool,
+	pub def_namespace: Option<String>
 }
 
 /// A `Cipher` and `Decipher` processor.
@@ -31,23 +31,23 @@ pub struct Report<'a> {
 /// The processor exposes the application's cipher and decipher capabilities
 /// based on the `Hill's Method` cipher.
 #[derive(Debug, Default, Builder)]
-pub struct Processor<'a> {
-	key: &'a str,
-	source: &'a str,
+pub struct Processor {
+	key: String,
+	source: String,
 	fill_letter: Option<char>,
-	namespace: Option<&'a String>,
+	namespace: Option<String>,
 }
 
-impl Processor<'_> {
+impl Processor {
 	/// Ciphers the given `source text` based on the information passed
 	/// to the program, like a `key`, a `fill letter` or a possibe
 	/// `custom namespace`.
-	pub fn cipher(&self) -> Result<Report> {
+	pub fn cipher(self) -> Result<Report> {
 		// definition of which namespace to use: either the user supplied
 		// namespace or the default one
 		let namespace = self.def_namespace()?;
 
-		// Checking the validness of the user suplied info
+		// Checking the validness of the user supplied info
 		self.check_information(&namespace)?;
 
 		// getting the checked key's length square root
@@ -60,7 +60,7 @@ impl Processor<'_> {
 		let source = if !is_divisble(self.source.len(), &dimension) {
 			was_filled = true;
 			fill_txt(
-				self.source,
+				&self.source,
 				self.fill_letter.unwrap(),
 				turn_divisible(sl, &dimension), sl
 			)
@@ -69,7 +69,7 @@ impl Processor<'_> {
 		};
 
 		// getting the key's matrix representation and its determinant
-		let key_mtrx_repr = txt_mtrx_repr(dimension, dimension, self.key, &namespace)?;
+		let key_mtrx_repr = txt_mtrx_repr(dimension, dimension, &self.key, &namespace)?;
 		let key_mtrx_det = key_mtrx_repr.clone().det(); // it is clone because det() consumes
 													  // the the receiver
 
@@ -95,34 +95,25 @@ impl Processor<'_> {
 		);
 
 		// building the report
-		Ok(ReportBuilder::default()
-		   .used_key(self.key)
-		   .source_txt(self.source)
-		   .result_txt(ciphered_txt)
-		   .fill_letter(self.fill_letter)
-		   .filled(Some(was_filled))
-		   .def_namespace(self.namespace)
-		   .build()
-		   .unwrap()
-		)
+		Ok(self.build_report(ciphered_txt, was_filled))
 	}
 
 	/// Deciphers the given `ciphertext` based on the information passed
 	/// to the program, like the known `key`, or a possible known `fill letter`
 	/// and a `custom namespace` used in the `cipher` process.
-	pub fn decipher(&self) -> Result<Report> {
+	pub fn decipher(self) -> Result<Report> {
 		// definition of which namespace to use: either the user supplied
 		// namespace or the default one
 		let namespace = self.def_namespace()?;
 
-		// Checking the validness of the user suplied info
+		// Checking the validness of the user supplied info
 		self.check_information(&namespace)?;
 
 		// getting the passed key's length square root
 		let dimension = (self.key.len() as f64).sqrt() as usize;
 
 		// getting the key's matrix representation and its inverse
-		let key_mtrx_repr = txt_mtrx_repr(dimension, dimension, self.key, &namespace)?;
+		let key_mtrx_repr = txt_mtrx_repr(dimension, dimension, &self.key, &namespace)?;
 		let key_mtrx_inv = key_mtrx_repr.clone().inverse();
 
 		// deciphering the given source text
@@ -169,16 +160,7 @@ impl Processor<'_> {
 				);
 
 				// building the report
-				Ok(ReportBuilder::default()
-				   .used_key(self.key)
-				   .source_txt(self.source)
-				   .result_txt(deciphered_txt)
-				   .fill_letter(self.fill_letter)
-				   .filled(None)
-				   .def_namespace(self.namespace)
-				   .build()
-				   .unwrap()
-				)
+				Ok(self.build_report(deciphered_txt, false))
 			},
 			// if the passed key's matrix representation has no an inverse,
 			// then the key length is not square
@@ -188,21 +170,34 @@ impl Processor<'_> {
 		}
 	}
 
+	/// Builds a final `Report` instance that hold the result of the `cipher`
+	/// or `decipher` processes.
+	pub fn build_report(self, res_text: String, filled: bool) -> Report {
+		ReportBuilder::default()
+		   .used_key(self.key)
+		   .source_txt(self.source)
+		   .result_txt(res_text)
+		   .fill_letter(self.fill_letter)
+		   .filled(filled)
+		   .def_namespace(self.namespace)
+		   .build()
+		   .unwrap()
+	}
+
 	/// Defines the `namespace` to use in the `cipher` and `decipher` processes.
 	/// If a custom namespace is not defined, the default one is used. In case
 	/// that the user defined namespace has a length < 29, then
 	/// (ProcessingError)[crate::error::Error] is returned.
 	fn def_namespace(&self) -> Result<Vec<char>> {
-		match self.namespace {
+		match &self.namespace {
 			Some(ns) => {
 				// cheking if the supplied namespace is malformed
-				Self::check_namespace(ns)?;
+				Self::check_namespace(&ns)?;
 
-				let ns_len = ns.len();
-				if ns_len < DEFAULT_NAMESPACE.len() || !is_square(ns_len) {
+				if !is_square(ns.len()) {
 					return Err(
 						format!(
-							"the supplied namespace must to has a square length"
+							"the supplied namespace must be square in length"
 						).into()
 					);
 				}
@@ -212,24 +207,24 @@ impl Processor<'_> {
 		}
 	}
 
-	/// Cheks if possible custom `defined` namespace is malformed, that is
+	/// Checks if possible custom `defined` namespace is malformed, that is
 	/// if it has duplicated values, if it is the case,
 	/// (ProcessingError)[crate::error::Error] is returned.
 	fn check_namespace(namespace: &String) -> Result<()> {
 		let rgx = Regex::new(r"(.)\1{1,}").unwrap();
 		if rgx.is_match(namespace).unwrap() {
-			return Err("the suplied namespace has duplicated characters".into())
+			return Err("the supplied namespace has duplicated characters".into())
 		}
 
 		Ok(())
 	}
 
-	/// Checs the validness of the user supplied information. If something went
+	/// Checks the validness of the user supplied information. If something went
 	/// wrong in the checking, (ProcessingError)[crate::error::Error] is returned.
 	fn check_information(&self, namespace: &[char]) -> Result<()> {
-		// checking if the suplied key has a square length
+		// checking if the supplied key has a square length
 		if !is_square(self.key.len()) {
-			return Err("the suplied key must has a square length".into())
+			return Err("the supplied key must be square in length".into())
 		}
 
 		// checking if the supplied fill character is inside the namespace
@@ -238,12 +233,12 @@ impl Processor<'_> {
 		}
 
 		// checking if the supplied key and source text have an unkwnon character
-		let mut target = self.key;
+		let mut target = &self.key;
 		for _ in 0..2 {
 			for c in target.chars() {
 				Self::is_in_namespace(c, &namespace)?;
 			}
-			target = self.source;
+			target = &self.source;
 		}
 
 		Ok(())
@@ -253,7 +248,8 @@ impl Processor<'_> {
 	/// the `cipher` and `decipher` processes, if it is not,
 	/// (ProcessingError)[crate::error::Error] is returned.
 	fn check_key_mtrx_validness(det: &f64, ns_len: usize) -> Result<()> {
-		if *det == 0.0 || has_any_factor(*det as usize, ns_len) {
+		let mod_mul_inv = modinverse::modinverse(*det as i128, ns_len as i128);
+		if *det == 0.0 || mod_mul_inv.is_none() || has_any_factor(det.abs() as usize, ns_len) {
 			return Err(
 				format!(
 					"the specified key cannot be used. [matrix's det 0 or has factors with {}]",
@@ -357,9 +353,9 @@ fn euc_mod(a: i128, b: u128) -> u128 {
 
 /// Checks if the supplied number is square.
 fn is_square(num: usize) -> bool {
-	let sqrt = (num as f64).sqrt();
+	let sqrt = (num as f64).sqrt().floor();
 
-	num == 0 || num == 1 || (sqrt * sqrt == num as f64)
+	num == 0 || num == 1 || (sqrt.powi(2) == num as f64)
 }
 
 /// Checks if the supplied target number is divisible by another one.
@@ -474,6 +470,7 @@ mod tests {
 		);
 	}
 
+	#[derive(Clone)]
 	struct TestArgInfo {
 		key: String,
 		source: String,
@@ -489,22 +486,23 @@ mod tests {
 			fill_letter: Some('H'),
 			namespace: None
 		};
+		let info_cl = info.clone();
 
 		let processor = ProcessorBuilder::default()
-			.key(&info.key)
-			.source(&info.source)
-			.fill_letter(info.fill_letter)
-			.namespace(info.namespace.as_ref())
+			.key(info_cl.key)
+			.source(info_cl.source)
+			.fill_letter(info_cl.fill_letter)
+			.namespace(info_cl.namespace)
 			.build()
 			.unwrap();
 
 		let report = ReportBuilder::default()
-			.used_key(&info.key)
-			.source_txt(&info.source)
+			.used_key(info.key)
+			.source_txt(info.source)
 			.result_txt("WLPGSE".to_owned())
 			.fill_letter(info.fill_letter)
-			.filled(Some(false))
-			.def_namespace(info.namespace.as_ref())
+			.filled(false)
+			.def_namespace(info.namespace)
 			.build()
 			.unwrap();
 
@@ -519,22 +517,23 @@ mod tests {
 			fill_letter: Some('H'),
 			namespace: None
 		};
+		let info_cl = info.clone();
 
 		let processor = ProcessorBuilder::default()
-			.key(&info.key)
-			.source(&info.source)
-			.fill_letter(info.fill_letter)
-			.namespace(info.namespace.as_ref())
+			.key(info_cl.key)
+			.source(info_cl.source)
+			.fill_letter(info_cl.fill_letter)
+			.namespace(info_cl.namespace)
 			.build()
 			.unwrap();
 
 		let report = ReportBuilder::default()
-			.used_key(&info.key)
-			.source_txt(&info.source)
+			.used_key(info.key)
+			.source_txt(info.source)
 			.result_txt("CODIGO".to_owned())
 			.fill_letter(info.fill_letter)
-			.filled(None)
-			.def_namespace(info.namespace.as_ref())
+			.filled(false)
+			.def_namespace(info.namespace)
 			.build()
 			.unwrap();
 
@@ -545,27 +544,28 @@ mod tests {
 	fn cipher_operation_with_custom_namespace_is_completed() {
 		let dns="ABCDEFGHIJKLMNOPQRSTUVWXYZ @$^&*/?.-".to_owned();
 		let info = TestArgInfo {
-			key: "FJCRXLUDN".to_owned(),
+			key: "AFJCRXLUDNLZ@$^?".to_owned(),
 			source: "TEST CODIGO".to_owned(),
 			fill_letter: Some('H'),
 			namespace: Some(dns)
 		};
+		let info_cl = info.clone();
 
 		let processor = ProcessorBuilder::default()
-			.key(&info.key)
-			.source(&info.source)
-			.fill_letter(info.fill_letter)
-			.namespace(info.namespace.as_ref())
+			.key(info_cl.key)
+			.source(info_cl.source)
+			.fill_letter(info_cl.fill_letter)
+			.namespace(info_cl.namespace)
 			.build()
 			.unwrap();
 
 		let report = ReportBuilder::default()
-			.used_key(&info.key)
-			.source_txt(&info.source)
-			.result_txt("T^$BT ^DVMBF".to_owned())
+			.used_key(info.key)
+			.source_txt(info.source)
+			.result_txt("XR$HNK^BJQ@?".to_owned())
 			.fill_letter(info.fill_letter)
-			.filled(Some(true))
-			.def_namespace(info.namespace.as_ref())
+			.filled(true)
+			.def_namespace(info.namespace)
 			.build()
 			.unwrap();
 
@@ -576,27 +576,28 @@ mod tests {
 	fn decipher_operation_with_custom_namespace_is_completed() {
 		let dns="ABCDEFGHIJKLMNOPQRSTUVWXYZ @$^&*/?.-".to_owned();
 		let info = TestArgInfo {
-			key: "FJCRXLUDN".to_owned(),
-			source: "T^$BT ^DVMBF".to_owned(),
+			key: "AFJCRXLUDNLZ@$^?".to_owned(),
+			source: "XR$HNK^BJQ@?".to_owned(),
 			fill_letter: Some('H'),
 			namespace: Some(dns)
 		};
+		let info_cl = info.clone();
 
 		let processor = ProcessorBuilder::default()
-			.key(&info.key)
-			.source(&info.source)
-			.fill_letter(info.fill_letter)
-			.namespace(info.namespace.as_ref())
+			.key(info_cl.key)
+			.source(info_cl.source)
+			.fill_letter(info_cl.fill_letter)
+			.namespace(info_cl.namespace)
 			.build()
 			.unwrap();
 
 		let report = ReportBuilder::default()
-			.used_key(&info.key)
-			.source_txt(&info.source)
+			.used_key(info.key)
+			.source_txt(info.source)
 			.result_txt("TEST CODIGOH".to_owned())
 			.fill_letter(info.fill_letter)
-			.filled(None)
-			.def_namespace(info.namespace.as_ref())
+			.filled(false)
+			.def_namespace(info.namespace)
 			.build()
 			.unwrap();
 

@@ -7,8 +7,8 @@ macro_rules! report_msg {
 		eprint!("{}", colored::Colorize::bold(
 				colored::Colorize::green("Report result"))
 		);
-		eprint!("{}", colored::Colorize::bold(": "));
-		eprintln!("{:>4}", colored::Colorize::bold(format!($($fmt)+)));
+		eprintln!("{}", colored::Colorize::bold(": "));
+		eprintln!("{}", &*format!($($fmt)+));
 	};
 }
 

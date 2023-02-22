@@ -9,9 +9,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
 	#[error("{0}")]
 	ProcessingError(String),
-
-	#[error("the specified value has a not valid utf-8 value")]
-	InvalidData(#[from] ::std::str::Utf8Error)
 }
 
 impl From<&'static str> for Error {

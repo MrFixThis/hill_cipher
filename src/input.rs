@@ -1,7 +1,7 @@
 use structopt::StructOpt;
 use structopt::clap::AppSettings;
 
-/// Cypher and decipher text using the Hill's Cypher method
+/// Cipher and decipher text using the Hill's cipher method
 #[derive(Debug, StructOpt)]
 #[structopt(
 	name = "hill_cipher",
@@ -19,8 +19,8 @@ pub struct Args {
 #[derive(Debug, StructOpt)]
 #[structopt(rename_all = "kebab-case")]
 pub enum Command {
-	/// Cypher a given source text
-	Cypher {
+	/// Cipher a given source text
+	Cipher {
 		/// Key to cipher the source text
 		#[structopt(short, long)]
 		key: String,
