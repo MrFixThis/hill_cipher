@@ -1,4 +1,5 @@
 use derive_builder::Builder;
+use fancy_regex::Regex;
 use rulinalg::matrix::{Matrix, BaseMatrix};
 use modinverse;
 
@@ -11,6 +12,20 @@ pub const DEFAULT_NAMESPACE: [char; 26] = [
 	'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'
 ];
 
+/// `Cipher`/`Decipher` processes report.
+///
+/// A report that holds the results of the processes performed by a
+/// [`Processor`] with the information provided to program.
+#[derive(Debug, Default, Builder, PartialEq)]
+pub struct Report<'a> {
+	pub used_key: &'a str,
+	pub source_txt: &'a str,
+	pub fill_letter: Option<char>,
+	pub result_txt: String,
+	pub filled: Option<bool>,
+	pub def_namespace: Option<&'a String>
+}
+
 /// A `Cipher` and `Decipher` processor.
 ///
 /// The processor exposes the application's cipher and decipher capabilities
@@ -19,52 +34,48 @@ pub const DEFAULT_NAMESPACE: [char; 26] = [
 pub struct Processor<'a> {
 	key: &'a str,
 	source: &'a str,
-	fill_letter: Option<&'a char>,
-	name_space: Option<&'a[char]>,
+	fill_letter: Option<char>,
+	namespace: Option<&'a String>,
 }
 
 impl Processor<'_> {
 	/// Ciphers the given `source text` based on the information passed
 	/// to the program, like a `key`, a `fill letter` or a possibe
 	/// `custom namespace`.
-	pub fn cipher(&self) -> Result<String> {
+	pub fn cipher(&self) -> Result<Report> {
 		// definition of which namespace to use: either the user supplied
 		// namespace or the default one
-		let namespace = self.define_namespace()?;
+		let namespace = self.def_namespace()?;
 
 		// Checking the validness of the user suplied info
-		self.chek_information(namespace)?;
+		self.check_information(&namespace)?;
 
 		// getting the checked key's length square root
 		let dimension = (self.key.len() as f64).sqrt() as usize;
 
-		// cheking if the source text's length is divisible by the above dimension.
+		// checking if the source text's length is divisible by the above dimension.
 		// If it is not, the the text is filled
+		let mut was_filled = false;
 		let sl = self.source.len();
 		let source = if !is_divisble(self.source.len(), &dimension) {
+			was_filled = true;
 			fill_txt(
 				self.source,
 				self.fill_letter.unwrap(),
-				turn_divisible(sl, &dimension), sl)
+				turn_divisible(sl, &dimension), sl
+			)
 		} else {
 			self.source.to_uppercase()
 		};
 
 		// getting the key's matrix representation and its determinant
-		let key_mtrx_repr = txt_mtrx_repr(dimension, dimension, self.key, namespace)?;
+		let key_mtrx_repr = txt_mtrx_repr(dimension, dimension, self.key, &namespace)?;
 		let key_mtrx_det = key_mtrx_repr.clone().det(); // it is clone because det() consumes
-											  // the the receiver
-		// checking if the supplied key is valid to use for the cipher process
-		if key_mtrx_det == 0.0 || has_any_factor(
-			key_mtrx_det as usize, namespace.len() as usize
-		) {
-			return Err(
-				format!(
-					"the specified key cannot be used. [matrix's det 0 or has factors with {}]",
-					namespace.len()
-				 ).into()
-			)
-		}
+													  // the the receiver
+
+		// checking if the supplied key's matrix representation is valid to
+		// use for the cipher process
+		Self::check_key_mtrx_validness(&key_mtrx_det, namespace.len())?;
 
 		// spliting the source text into as many parts as the square root of
 		// the key's matrix representation dimension, and turning its values
@@ -73,58 +84,100 @@ impl Processor<'_> {
 			source.len() / dimension,
 			dimension,
 			&source,
-			namespace
+			&namespace
 		)?;
 
-		// turning the ciphered parts into its textual representation
-		Ok(translate_txt_mtrx(&key_mtrx_repr, src_mtrx_repr, namespace))
+		// turning the ciphertext parts into its textual representation
+		let ciphered_txt = translate_txt_mtrx(
+			&key_mtrx_repr,
+			src_mtrx_repr,
+			namespace
+		);
+
+		// building the report
+		Ok(ReportBuilder::default()
+		   .used_key(self.key)
+		   .source_txt(self.source)
+		   .result_txt(ciphered_txt)
+		   .fill_letter(self.fill_letter)
+		   .filled(Some(was_filled))
+		   .def_namespace(self.namespace)
+		   .build()
+		   .unwrap()
+		)
 	}
 
-	/// Deciphers the given `ciphered text` based on the information passed
+	/// Deciphers the given `ciphertext` based on the information passed
 	/// to the program, like the known `key`, or a possible known `fill letter`
 	/// and a `custom namespace` used in the `cipher` process.
-	pub fn decipher(&self) -> Result<String> {
+	pub fn decipher(&self) -> Result<Report> {
 		// definition of which namespace to use: either the user supplied
 		// namespace or the default one
-		let namespace = self.define_namespace()?;
+		let namespace = self.def_namespace()?;
 
 		// Checking the validness of the user suplied info
-		self.chek_information(&namespace)?;
+		self.check_information(&namespace)?;
 
 		// getting the passed key's length square root
 		let dimension = (self.key.len() as f64).sqrt() as usize;
 
 		// getting the key's matrix representation and its inverse
-		let key_mtrx_repr = txt_mtrx_repr(dimension, dimension, self.key, namespace)?;
+		let key_mtrx_repr = txt_mtrx_repr(dimension, dimension, self.key, &namespace)?;
 		let key_mtrx_inv = key_mtrx_repr.clone().inverse();
 
 		// deciphering the given source text
 		match key_mtrx_inv {
 			Ok(inverse) => {
+				let key_mtrx_det = key_mtrx_repr.det();
+				
+				// checking if the supplied key's matrix representation is valid to
+				// use for the decipher process
+				Self::check_key_mtrx_validness(&key_mtrx_det, namespace.len())?;
+
 				// getting modular multiplicative inverse of the keys's
 				// matrix representation determinant
 				let mod_mul_inv = modinverse::modinverse(
-					key_mtrx_repr.det() as u64,
-					dimension as u64
+					key_mtrx_det as i128,
+					namespace.len() as i128
 				).unwrap() as f64;
+				
+				// multipling the key's matrix representation inverse
+				// by its modular multiplicative inverse
+				let inverse = Matrix::new(
+					inverse.rows(),
+					inverse.cols(),
+					inverse
+						.into_vec()
+						.into_iter()
+						.map(|v| ((v * mod_mul_inv) * key_mtrx_det).round())
+						.collect::<Vec<_>>()
+				);
 
-				// turning the ciphered text into its matrix representation
-				// and multipling its values by the modular multiplicative
-				// inverse of the keys's matrix representation
-				let mut src_mtrx_repr = txt_mtrx_repr(
+				// turning the ciphertext into its matrix representation
+				let src_mtrx_repr = txt_mtrx_repr(
 					self.source.len() / dimension,
 					dimension,
 					&self.source,
-					namespace
+					&namespace
 				)?;
-				for v in src_mtrx_repr.mut_data() { let _ = *v * mod_mul_inv; }
 
-				// turning the deciphered parts into its textual representation
-				Ok(translate_txt_mtrx(
-						&inverse,
-						src_mtrx_repr,
-						namespace,
-					)
+				// turning the deciphertext parts into its textual representation
+				let deciphered_txt = translate_txt_mtrx(
+					&inverse,
+					src_mtrx_repr,
+					namespace,
+				);
+
+				// building the report
+				Ok(ReportBuilder::default()
+				   .used_key(self.key)
+				   .source_txt(self.source)
+				   .result_txt(deciphered_txt)
+				   .fill_letter(self.fill_letter)
+				   .filled(None)
+				   .def_namespace(self.namespace)
+				   .build()
+				   .unwrap()
 				)
 			},
 			// if the passed key's matrix representation has no an inverse,
@@ -139,9 +192,12 @@ impl Processor<'_> {
 	/// If a custom namespace is not defined, the default one is used. In case
 	/// that the user defined namespace has a length < 29, then
 	/// (ProcessingError)[crate::error::Error] is returned.
-	fn define_namespace(&self) -> Result<&[char]> {
-		match self.name_space {
+	fn def_namespace(&self) -> Result<Vec<char>> {
+		match self.namespace {
 			Some(ns) => {
+				// cheking if the supplied namespace is malformed
+				Self::check_namespace(ns)?;
+
 				let ns_len = ns.len();
 				if ns_len < DEFAULT_NAMESPACE.len() || !is_square(ns_len) {
 					return Err(
@@ -150,30 +206,42 @@ impl Processor<'_> {
 						).into()
 					);
 				}
-				Ok(ns)
+				Ok(ns.chars().collect())
 			},
-			None => Ok(&DEFAULT_NAMESPACE)
+			None => Ok(DEFAULT_NAMESPACE.to_vec())
 		}
 	}
 
-	/// Cheks the validness of the user supplied information. If something went
-	/// wrong in the cheking, (ProcessingError)[crate::error::Error] is returned.
-	fn chek_information(&self, namespace: &[char]) -> Result<()> {
+	/// Cheks if possible custom `defined` namespace is malformed, that is
+	/// if it has duplicated values, if it is the case,
+	/// (ProcessingError)[crate::error::Error] is returned.
+	fn check_namespace(namespace: &String) -> Result<()> {
+		let rgx = Regex::new(r"(.)\1{1,}").unwrap();
+		if rgx.is_match(namespace).unwrap() {
+			return Err("the suplied namespace has duplicated characters".into())
+		}
+
+		Ok(())
+	}
+
+	/// Checs the validness of the user supplied information. If something went
+	/// wrong in the checking, (ProcessingError)[crate::error::Error] is returned.
+	fn check_information(&self, namespace: &[char]) -> Result<()> {
 		// checking if the suplied key has a square length
 		if !is_square(self.key.len()) {
 			return Err("the suplied key must has a square length".into())
 		}
 
-		// cheking if the supplied fill character is inside the namespace
+		// checking if the supplied fill character is inside the namespace
 		if let Some(f) = self.fill_letter {
 			Self::is_in_namespace(f, &namespace)?;
 		}
 
-		// cheking if the supplied key and source text have an unkwnon character
+		// checking if the supplied key and source text have an unkwnon character
 		let mut target = self.key;
 		for _ in 0..2 {
 			for c in target.chars() {
-				Self::is_in_namespace(&c, &namespace)?;
+				Self::is_in_namespace(c, &namespace)?;
 			}
 			target = self.source;
 		}
@@ -181,10 +249,26 @@ impl Processor<'_> {
 		Ok(())
 	}
 
+	/// Checks if the supplied `key`'s matrix representation is valid to perform
+	/// the `cipher` and `decipher` processes, if it is not,
+	/// (ProcessingError)[crate::error::Error] is returned.
+	fn check_key_mtrx_validness(det: &f64, ns_len: usize) -> Result<()> {
+		if *det == 0.0 || has_any_factor(*det as usize, ns_len) {
+			return Err(
+				format!(
+					"the specified key cannot be used. [matrix's det 0 or has factors with {}]",
+					ns_len
+				 ).into()
+			)
+		}
+
+		Ok(())
+	}
+
 	/// Checks if the supplied `character` is inside the given namespace; if it
 	/// is not, (ProcessingError)[crate::error::Error] is returned.
-	fn is_in_namespace(char: &char, namespace: &[char]) -> Result<()> {
-		if namespace.into_iter().find(|&c| *c == *char) == None {
+	fn is_in_namespace(char: char, namespace: &[char]) -> Result<()> {
+		if namespace.into_iter().find(|&c| *c == char) == None {
 			return Err(
 				format!(
 					"the character '{char}' is not present in the namespace"
@@ -203,14 +287,14 @@ impl Processor<'_> {
 fn translate_txt_mtrx(
 	key_mtrx: &Matrix<f64>,
 	src_mtrx: Matrix<f64>,
-	namespace: &[char]
+	namespace: Vec<char>
 ) -> String {
 	// ciphering the source text's matrix
 	let mtrx_mul = (key_mtrx * src_mtrx).transpose();
 	mtrx_mul
 		.into_vec()
 		.into_iter()
-		.map(|v| namespace[(v % namespace.len() as f64) as usize])
+		.map(|v| namespace[euc_mod(v as i128, namespace.len() as u128) as usize])
 		.collect()
 }
 
@@ -226,14 +310,14 @@ fn txt_mtrx_repr(
 {
 	let parts: Vec<_> = src
 		.chars()
-		.map(|c| char_pos(&c, namespace) as f64)
+		.map(|c| char_pos(c, namespace) as f64)
 		.collect();
 
 	Ok(Matrix::new(rows, cols, parts).transpose())
 }
 
 /// Fills a given `text` with a specified character (a - b) times.
-fn fill_txt(txt: &str, char: &char, a: usize, b: usize) -> String {
+fn fill_txt(txt: &str, char: char, a: usize, b: usize) -> String {
 	let reps = a - b;
 
 	if reps != 0 {
@@ -245,7 +329,7 @@ fn fill_txt(txt: &str, char: &char, a: usize, b: usize) -> String {
 }
 
 /// Retrives the given character's `position` inside the namespace specified.
-fn char_pos(char: &char, namespace: &[char]) -> usize {
+fn char_pos(char: char, namespace: &[char]) -> usize {
 	namespace.iter().position(|&c| c == char.to_ascii_uppercase()).unwrap()
 }
 
@@ -258,6 +342,17 @@ fn has_any_factor(target: usize, number: usize) -> bool {
 		}
 	}
 	false
+}
+
+/// Performs the modulus of a number in any other number specified,
+/// following the `Euclid` algorithm.
+fn euc_mod(a: i128, b: u128) -> u128 {
+    if a >= 0 {
+        (a as u128) % b
+    } else {
+        let r = (!a as u128) % b;
+        b - r - 1
+    }
 }
 
 /// Checks if the supplied number is square.
@@ -296,7 +391,7 @@ mod tests {
 		let fill_char = 'E';
 
 		assert_eq!(
-			fill_txt(&src, &fill_char, turn_divisible(sl, &key_dim), sl),
+			fill_txt(&src, fill_char, turn_divisible(sl, &key_dim), sl),
 			"ABCDEE"
 		);
 	}
@@ -317,7 +412,7 @@ mod tests {
 	}
 
 	#[test]
-	fn source_text_is_turned_into_matrix_representation() {
+	fn text_is_turned_into_matrix_representation() {
 		let _key = "FJCRXLUDN";
 		let src = "CODIGO".to_owned();
 		let dim = (_key.len() as f64).sqrt() as usize;
@@ -333,13 +428,13 @@ mod tests {
 	}
 
 	#[test]
-	fn source_text_parts_are_turned_into_ciphered_text() {
-		let namespace = &DEFAULT_NAMESPACE;
+	fn source_text_parts_are_turned_into_ciphertext() {
+		let namespace = DEFAULT_NAMESPACE.to_vec();
 		let key = "FJCRXLUDN";
 		let src = "CODIGO".to_owned();
 		let dim = (key.len() as f64).sqrt() as usize;
-		let key_mtrx = txt_mtrx_repr(dim, dim, &key, namespace).unwrap();
-		let src_mtrx = txt_mtrx_repr(src.len()/dim, dim, &src, namespace).unwrap();
+		let key_mtrx = txt_mtrx_repr(dim, dim, &key, &namespace).unwrap();
+		let src_mtrx = txt_mtrx_repr(src.len()/dim, dim, &src, &namespace).unwrap();
 
 		assert_eq!(
 			translate_txt_mtrx(&key_mtrx, src_mtrx, namespace),
@@ -348,10 +443,163 @@ mod tests {
 	}
 
 	#[test]
-	fn name() {
-	    unimplemented!();
+	fn ciphertext_parts_are_turned_into_deciphertext() {
+		let namespace = DEFAULT_NAMESPACE.to_vec();
+		let key = "FJCRXLUDN";
+		let src = "WLPGSE".to_owned();
+		let dim = (key.len() as f64).sqrt() as usize;
+		let key_mtrx = txt_mtrx_repr(dim, dim, &key, &namespace).unwrap();
+		let src_mtrx = txt_mtrx_repr(src.len()/dim, dim, &src, &namespace).unwrap();
+
+		let key_mtrx_inv = key_mtrx.clone().inverse().unwrap();
+		let key_mtrx_det =  key_mtrx.det();
+		let mod_mul_inv = modinverse::modinverse(
+			key_mtrx_det as i64,
+			namespace.len() as i64
+		).unwrap() as f64;
+
+		let key_mtrx_inv = Matrix::new(
+			key_mtrx_inv.rows(),
+			key_mtrx_inv.cols(),
+			key_mtrx_inv
+				.into_vec()
+				.into_iter()
+				.map(|v| ((v * mod_mul_inv) * key_mtrx_det).round())
+				.collect::<Vec<_>>()
+		);
+
+		assert_eq!(
+			translate_txt_mtrx(&key_mtrx_inv, src_mtrx, namespace),
+			String::from("CODIGO")
+		);
 	}
 
-	//TODO: Build the test for the whole cipher and decipher processes
-	//checking the validness of the input info
+	struct TestArgInfo {
+		key: String,
+		source: String,
+		fill_letter: Option<char>,
+		namespace: Option<String>,
+	}
+
+	#[test]
+	fn cipher_operation_with_default_namespace_is_completed() {
+		let info = TestArgInfo {
+			key: "FJCRXLUDN".to_owned(),
+			source: "CODIGO".to_owned(),
+			fill_letter: Some('H'),
+			namespace: None
+		};
+
+		let processor = ProcessorBuilder::default()
+			.key(&info.key)
+			.source(&info.source)
+			.fill_letter(info.fill_letter)
+			.namespace(info.namespace.as_ref())
+			.build()
+			.unwrap();
+
+		let report = ReportBuilder::default()
+			.used_key(&info.key)
+			.source_txt(&info.source)
+			.result_txt("WLPGSE".to_owned())
+			.fill_letter(info.fill_letter)
+			.filled(Some(false))
+			.def_namespace(info.namespace.as_ref())
+			.build()
+			.unwrap();
+
+		assert_eq!(processor.cipher().unwrap(), report);
+	}
+
+	#[test]
+	fn decipher_operation_with_default_namespace_is_completed() {
+		let info = TestArgInfo {
+			key: "FJCRXLUDN".to_owned(),
+			source: "WLPGSE".to_owned(),
+			fill_letter: Some('H'),
+			namespace: None
+		};
+
+		let processor = ProcessorBuilder::default()
+			.key(&info.key)
+			.source(&info.source)
+			.fill_letter(info.fill_letter)
+			.namespace(info.namespace.as_ref())
+			.build()
+			.unwrap();
+
+		let report = ReportBuilder::default()
+			.used_key(&info.key)
+			.source_txt(&info.source)
+			.result_txt("CODIGO".to_owned())
+			.fill_letter(info.fill_letter)
+			.filled(None)
+			.def_namespace(info.namespace.as_ref())
+			.build()
+			.unwrap();
+
+		assert_eq!(processor.decipher().unwrap(), report);
+	}
+
+	#[test]
+	fn cipher_operation_with_custom_namespace_is_completed() {
+		let dns="ABCDEFGHIJKLMNOPQRSTUVWXYZ @$^&*/?.-".to_owned();
+		let info = TestArgInfo {
+			key: "FJCRXLUDN".to_owned(),
+			source: "TEST CODIGO".to_owned(),
+			fill_letter: Some('H'),
+			namespace: Some(dns)
+		};
+
+		let processor = ProcessorBuilder::default()
+			.key(&info.key)
+			.source(&info.source)
+			.fill_letter(info.fill_letter)
+			.namespace(info.namespace.as_ref())
+			.build()
+			.unwrap();
+
+		let report = ReportBuilder::default()
+			.used_key(&info.key)
+			.source_txt(&info.source)
+			.result_txt("T^$BT ^DVMBF".to_owned())
+			.fill_letter(info.fill_letter)
+			.filled(Some(true))
+			.def_namespace(info.namespace.as_ref())
+			.build()
+			.unwrap();
+
+		assert_eq!(processor.cipher().unwrap(), report);
+	}
+
+	#[test]
+	fn decipher_operation_with_custom_namespace_is_completed() {
+		let dns="ABCDEFGHIJKLMNOPQRSTUVWXYZ @$^&*/?.-".to_owned();
+		let info = TestArgInfo {
+			key: "FJCRXLUDN".to_owned(),
+			source: "T^$BT ^DVMBF".to_owned(),
+			fill_letter: Some('H'),
+			namespace: Some(dns)
+		};
+
+		let processor = ProcessorBuilder::default()
+			.key(&info.key)
+			.source(&info.source)
+			.fill_letter(info.fill_letter)
+			.namespace(info.namespace.as_ref())
+			.build()
+			.unwrap();
+
+		let report = ReportBuilder::default()
+			.used_key(&info.key)
+			.source_txt(&info.source)
+			.result_txt("TEST CODIGOH".to_owned())
+			.fill_letter(info.fill_letter)
+			.filled(None)
+			.def_namespace(info.namespace.as_ref())
+			.build()
+			.unwrap();
+
+		assert_eq!(processor.decipher().unwrap(), report);
+	}
 }

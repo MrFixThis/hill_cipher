@@ -44,15 +44,15 @@ pub enum Command {
 		#[structopt(short, long)]
 		key: String,
 
-		/// Cyphered source text
+		/// Cipher source text
 		#[structopt(short, long)]
 		source: String,
 
-		/// Known key's and source text's fill letter
+		/// Known source text's fill letter
 		#[structopt(short, long)]
 		fill_letter: Option<char>,
 
-		/// Known namespace used to cipher the ciphered source text
+		/// Known namespace used to decipher source text
 		#[structopt(short, long)]
 		namespace: Option<String>
 	}
